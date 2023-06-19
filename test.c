@@ -48,7 +48,7 @@ void *add_queue(void *data)
     ATOMIC_ADD64(&cnt_added, added);
     ATOMIC_SUB(&cnt_producer, 1);
     printf("Producer thread [%lu] exited! Still %d running...\n",
-           pthread_self(), cnt_producer);
+           pthread_self(), atomic_load(&cnt_producer));
     return 0;
 }
 
@@ -69,7 +69,7 @@ void *remove_queue(void *data)
             free(p);
             deleted++;
         } else {
-            if (ctx->count || cnt_producer)
+            if (ctx->count || atomic_load(&cnt_producer))
                 sched_yield(); /* queue is empty, release CPU slice */
             else
                 break; /* queue is empty and no more producers */

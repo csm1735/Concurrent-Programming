@@ -10,7 +10,7 @@
 static bool in_hp(struct lfq_ctx *ctx, struct lfq_node *node)
 {
     for (int i = 0; i < ctx->MAX_HP_SIZE; i++) {
-        if (ctx->HP[i] == node)
+        if (atomic_load(&ctx->HP[i]) == node) 
             return true;
     }
     return false;
@@ -19,11 +19,10 @@ static bool in_hp(struct lfq_ctx *ctx, struct lfq_node *node)
 /* add to tail of the free list */
 static void insert_pool(struct lfq_ctx *ctx, struct lfq_node *node)
 {
-    node->free_next = NULL;
+    atomic_store(&node->free_next, NULL); 
     struct lfq_node *old_tail = XCHG(&ctx->fpt, node); /* seq_cst */
-    old_tail->free_next = node;
+    atomic_store(&old_tail->free_next, node);
 }
-
 static void free_pool(struct lfq_ctx *ctx, bool freeall)
 {
     bool old = 0;
@@ -32,27 +31,27 @@ static void free_pool(struct lfq_ctx *ctx, bool freeall)
 
     for (int i = 0; i < MAX_FREE || freeall; i++) {
         struct lfq_node *p = ctx->fph;
-        if ((!p->can_free) || (!p->free_next) ||
+        if ((!atomic_load(&p->can_free)) || (!atomic_load(&p->free_next)) || 
             in_hp(ctx, (struct lfq_node *) p))
             goto final;
         ctx->fph = p->free_next;
         free(p);
     }
 final:
-    ctx->is_freeing = false;
+    atomic_store(&ctx->is_freeing, false);
     smb();
 }
 
 static void safe_free(struct lfq_ctx *ctx, struct lfq_node *node)
 {
-    if (node->can_free && !in_hp(ctx, node)) {
+    if (atomic_load(&node->can_free) && !in_hp(ctx, node)) { 
         /* free is not thread-safe */
         bool old = 0;
-        if (CAS(&ctx->is_freeing, &old, 1)) {
+        if (CAS(&ctx->is_freeing, &old, 1)) { 
             /* poison the pointer to detect use-after-free */
             node->next = (void *) -1;
             free(node); /* we got the lock; actually free */
-            ctx->is_freeing = false;
+            atomic_store(&ctx->is_freeing, false);
             smb();
         } else /* we did not get the lock; only add to a freelist */
             insert_pool(ctx, node);
@@ -137,7 +136,7 @@ int lfq_release(struct lfq_ctx *ctx)
 
 int lfq_enqueue(struct lfq_ctx *ctx, void *data)
 {
-    struct lfq_node *insert_node = calloc(1, sizeof(struct lfq_node));
+    struct lfq_node *insert_node = calloc(1, sizeof(struct lfq_node)); 
     if (!insert_node)
         return -errno;
 
@@ -153,7 +152,7 @@ int lfq_enqueue(struct lfq_ctx *ctx, void *data)
 #ifdef DEBUG
     assert(!(old_tail->next) && "old tail was not NULL");
 #endif
-    old_tail->next = insert_node;
+    atomic_store(&old_tail->next, insert_node);
     /* TODO: could a consumer thread could have freed the old tail?  no because
      * that would leave head=NULL
      */
@@ -171,36 +170,38 @@ void *lfq_dequeue_tid(struct lfq_ctx *ctx, int tid)
         /* continue jumps to the bottom of the loop, and would attempt a CAS
          * with uninitialized new_head.
          */
-        old_head = ctx->head;
+        old_head = atomic_load(&ctx->head); 
 
         /* seq-cst store.
          * FIXME: use xchg instead of mov + mfence on x86.
          */
-        ctx->HP[tid] = old_head;
+        atomic_store(&ctx->HP[tid], old_head); 
         mb();
 
         /* another thread freed it before seeing our HP[tid] store */
-        if (old_head != ctx->head)
+        if (old_head != atomic_load(&ctx->head))
             goto retry;
-        new_head = old_head->next;
+        new_head = atomic_load(&old_head->next);
+        
         if (new_head == 0) {
-            ctx->HP[tid] = 0;
+            atomic_store(&ctx->HP[tid], 0); 
             return NULL; /* never remove the last node */
         }
 #ifdef DEBUG
         // FIXME: check for already-freed nodes
         // assert(new_head != (void *) -1 && "read an already-freed node");
 #endif
-    } while (!CAS(&ctx->head, &old_head, new_head));
+    } while (!CAS(&ctx->head, &old_head, new_head)); 
 
     /* We have atomically advanced head, and we are the thread that won the race
      * to claim a node. We return the data from the *new* head. The list starts
      * off with a dummy node, so the current head is always a node that is
      * already been read.
      */
-    ctx->HP[tid] = 0;
-    void *ret = new_head->data;
-    new_head->can_free = true;
+    atomic_store(&ctx->HP[tid], 0); 
+    void *ret = new_head->data; 
+    atomic_store(&new_head->can_free, true); 
+    
 
     /* we need to avoid freeing until other readers are definitely not going to
      * load its ->next in the CAS loop
