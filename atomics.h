@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 #define ATOMIC_SET atomic_flag_test_and_set
 #define ATOMIC_RELEASE atomic_flag_clear
 
