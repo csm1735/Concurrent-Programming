@@ -4,27 +4,27 @@
 #include <stdbool.h>
 
 struct lfq_node {
-  void *data;
-  union {
-    struct lfq_node *next;
-    struct lfq_node *free_next;
-  };
-  bool can_free;
+    void *data;
+    union {
+        struct lfq_node *next;
+        struct lfq_node *free_next;
+    };
+    bool can_free;
 };
 
 struct lfq_ctx {
-  alignas(64) struct lfq_node *head;
-  int count;
-  struct lfq_node **HP; /* hazard pointers */
-  int *tid_map;
-  bool is_freeing;
-  struct lfq_node *fph, *fpt; /* free pool head/tail */
+    alignas(64) struct lfq_node *head;
+    int count;
+    struct lfq_node **HP; /* hazard pointers */
+    int *tid_map;
+    bool is_freeing;
+    struct lfq_node *fph, *fpt; /* free pool head/tail */
 
-  /* FIXME: get rid of struct. Make it configurable */
-  int MAX_HP_SIZE;
+    /* FIXME: get rid of struct. Make it configurable */
+    int MAX_HP_SIZE;
 
-  /* avoid cacheline contention */
-  alignas(64) struct lfq_node *tail;
+    /* avoid cacheline contention */
+    alignas(64) struct lfq_node *tail;
 };
 
 /**
